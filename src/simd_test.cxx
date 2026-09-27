@@ -94,7 +94,7 @@ int main(int argc, char **argv){
 #ifdef USE_GPU
     ForceSoft force_gpu[Nepi];
 #endif
-#ifdef USE_SIMD
+#if defined(USE_SIMD) || defined(USE_LARCH_SIMD)
     ForceSoft force_simd[Nepi];
     ForceSoft force_sp_simd[Nepi];
     ForceSoft force_nb_simd[Nepi];
@@ -114,7 +114,7 @@ int main(int argc, char **argv){
         force_gpu[i].clear();
 #endif
         force_sp[i].clear();
-#ifdef USE_SIMD
+#if defined(USE_SIMD) || defined(USE_LARCH_SIMD)
         force_simd[i].clear();
         force_sp_simd[i].clear();
         force_nb_simd[i].clear();
@@ -156,7 +156,7 @@ int main(int argc, char **argv){
     t_gpu += PS::GetWtime();
 #endif
 
-#ifdef USE_SIMD
+#if defined(USE_SIMD) || defined(USE_LARCH_SIMD)
     std::cout<<"calc Ep Ep simd\n";
     CalcForceEpEpWithLinearCutoffSimd f_ep_ep_simd;
     PS::F64 t_ep_simd=0;
@@ -243,7 +243,7 @@ int main(int argc, char **argv){
     for(int i=0; i<20; i++) nbcount[i]=0;
     PS::F64 nbcount_ave=0;
 
-#ifdef USE_SIMD
+#if defined(USE_SIMD) || defined(USE_LARCH_SIMD)
     PS::F64 dfmax_simd=0, dfpmax_simd=0;
     PS::F64 dsmax_simd=0, dspmax_simd=0;
     PS::F64 nbcount_ave_simd=0;
@@ -261,7 +261,7 @@ int main(int argc, char **argv){
 
     for(int i=0; i<Nepi; i++) {
         for (int j=0; j<3; j++) {
-#ifdef USE_SIMD
+#if defined(USE_SIMD) || defined(USE_LARCH_SIMD)
             df=(force[i].acc[j]-force_simd[i].acc[j])/force[i].acc[j];
             dfmax_simd = std::max(dfmax_simd, df);
             if(df>DF_MAX) std::cerr<<"Force diff: i="<<i<<" nosimd["<<j<<"] "<<force[i].acc[j]<<" simd["<<j<<"] "<<force_simd[i].acc[j]<<std::endl;
@@ -284,7 +284,7 @@ int main(int argc, char **argv){
             if(df>DF_MAX) std::cerr<<"Force sp diff: i="<<i<<" nosimd["<<j<<"] "<<force_sp[i].acc[j]<<" fugaku["<<j<<"] "<<force_sp_fgk[i].acc[j]<<std::endl;
 #endif
         }
-#ifdef USE_SIMD
+#if defined(USE_SIMD) || defined(USE_LARCH_SIMD)
         dfpmax_simd = std::max(dfpmax_simd, (force[i].pot-force_simd[i].pot)/force[i].pot);
         dspmax_simd = std::max(dspmax_simd, (force_sp[i].pot-force_sp_simd[i].pot)/force_sp[i].pot);
 
@@ -366,7 +366,7 @@ int main(int argc, char **argv){
 #endif
     std::cout<<std::endl;
 
-#ifdef USE_SIMD    
+#if defined(USE_SIMD) || defined(USE_LARCH_SIMD)    
     std::cout<<"SIMD EP-EP force diff max: "<<dfmax_simd<<" Pot diff max: "<<dfpmax_simd<<std::endl
              <<"SIMD EP-Sp force diff max: "<<dsmax_simd<<" Pot diff max: "<<dspmax_simd<<std::endl;
 #endif
@@ -382,7 +382,7 @@ int main(int argc, char **argv){
       if (nbcount[i]>0) std::cout<<"NNB: "<<i<<" "<<nbcount[i]<<std::endl;
     std::cout<<"<NNB>:";
     std::cout<<" no_simd: "<<nbcount_ave;
-#ifdef USE_SIMD
+#if defined(USE_SIMD) || defined(USE_LARCH_SIMD)
     std::cout<<" simd: "<<nbcount_ave_simd;
 #endif
 #ifdef USE_GPU
@@ -393,7 +393,7 @@ int main(int argc, char **argv){
 #endif
     std::cout<<std::endl;
     
-#ifdef USE_SIMD
+#if defined(USE_SIMD) || defined(USE_LARCH_SIMD)
     std::cout<<"Time: epj  simd="<<t_ep_simd<<" no="<<t_ep_no<<" ratio="<<t_ep_no/t_ep_simd<<std::endl;
     std::cout<<"Time: spj  simd="<<t_sp_simd<<" no="<<t_sp_no<<" ratio="<<t_sp_no/t_sp_simd<<std::endl;
 #endif

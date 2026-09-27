@@ -770,7 +770,7 @@ public:
         tree_nb.clearNumberOfInteraction();
         tree_nb.clearTimeProfile();
 #endif
-#ifdef USE_SIMD
+#if defined(USE_SIMD) || defined(USE_LARCH_SIMD)
         tree_nb.calcForceAllAndWriteBack(SearchNeighborEpEpSimd(), system_soft, dinfo);
 #elif USE_FUGAKU
         tree_nb.calcForceAllAndWriteBack(SearchNeighborEpEpFugaku(), system_soft, dinfo);
@@ -919,7 +919,7 @@ public:
                                            system_soft,
                                            dinfo);
         
-#elif USE_SIMD // end use_gpu
+#elif defined(USE_SIMD) || defined(USE_LARCH_SIMD) // end use_gpu
         tree_soft.calcForceAllAndWriteBack(CalcForceEpEpWithLinearCutoffSimd(),
 #ifdef USE_QUAD
                                            CalcForceEpSpQuadSimd(),
@@ -2520,6 +2520,14 @@ public:
         fout<<"Use SIMD\n";
 #ifdef P3T_64BIT
         fout<<"Use 64 bit SIMD n";
+#endif
+#endif
+
+#ifdef USE_LARCH_SIMD
+#ifdef LARCH_SIMD_LSX
+        fout<<"Use LoongArch LSX SIMD kernels\n";
+#else
+        fout<<"Use LoongArch LASX SIMD kernels\n";
 #endif
 #endif
 

@@ -5,6 +5,9 @@
 #ifdef INTRINSIC_X86
 #include"phantomquad_for_p3t_x86.hpp"
 #endif
+#ifdef USE_LARCH_SIMD
+#include"force_loongarch.hpp"
+#endif
 
 
 // Neighbor search function

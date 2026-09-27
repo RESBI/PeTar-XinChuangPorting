@@ -198,7 +198,7 @@ In a different scenario, such as when Galpy is used but not installed via `pip3`
 
 To compile the code successfully, the C++ compiler (e.g., GNU gcc/g++, Intel icc/icpc, LLVM clang/clang++) must support at least the C++11 standard.
 
-Using MPI necessitates the MPI compiler (e.g., mpic++). NVIDIA GPU and CUDA compiler are essential for GPU acceleration. SIMD support has been tested for GNU, Intel, and LLVM compilers. Since it hasn't been tested for others, it's recommended to use these three compiler types. The Fugaku ARM A64FX architecture is also compatible.
+Using MPI necessitates the MPI compiler (e.g., mpic++). NVIDIA GPU and CUDA compiler are essential for GPU acceleration. SIMD support has been tested for GNU, Intel, and LLVM compilers. Since it hasn't been tested for others, it's recommended to use these three compiler types. The Fugaku ARM A64FX architecture and the LoongArch (LA64) architecture are also compatible.
 
 To use the SSE/BSE stellar evolution package, a Fortran (77) compiler, GNU gfortran, is required. It should be capable of providing an API to the C++ code, i.e., libgfortran is necessary. Intel ifort is currently not supported.
 
@@ -277,16 +277,17 @@ By default, PeTar enables multi-threaded OpenMP parallelization. To disable Open
 
 ### Selecting CPU Architecture
 
-PeTar can utilize SIMD-like instructions to optimize the performance of tree force calculation and tree neighbor counting. The currently supported CPU architectures for enabling this feature are Intel/AMD x86 and Fugaku ARM A64FX. Users can specify the architecture using the following command:
+PeTar can utilize SIMD-like instructions to optimize the performance of tree force calculation and tree neighbor counting. The currently supported CPU architectures for enabling this feature are Intel/AMD x86, Fugaku ARM A64FX, and Loongson LoongArch. Users can specify the architecture using the following command:
 
 ```shell
 ./configure --with-arch=[choices]
 ```
 
-where `[choices]` include `x86` and `fugaku`:
+where `[choices]` include `x86`, `fugaku`, and `loongarch`:
 
 - x86 (default): Intel and AMD CPU architecture, commonly used.
 - fugaku: Fugaku supercomputer CPU architecture, supporting A64FX instructions.
+- loongarch: Loongson LoongArch (LA64) CPU architecture, supporting LSX (128-bit) and LASX (256-bit) instructions. The tree force and tree neighbor kernels are implemented in `src/force_loongarch.hpp` with single-precision (F32) arithmetic. The vector width is selected with `--with-simd=lsx` or `--with-simd=lasx` (see the next section); the output binary name then carries the SIMD type, e.g., `petar.mpi.omp.lasx` or `petar.mpi.omp.lsx`, while `--with-simd=no` keeps the scalar F64 kernels and the plain `petar.mpi.omp` name.
 
 Please note that on the Fugaku supercomputer, the configuration only applies to the active nodes. Users are advised to initiate an interactive job to configure and compile the code.
 
@@ -304,6 +305,15 @@ where `[choices]` can be `auto`, `avx`, `avx2`, or `avx512`, with the latter off
 - avx: uses core-avx-i (theoretical speedup of 4x for single precision, 2x for double precision)
 - avx2: uses core-avx2 (8x for single, 4x for double)
 - avx512: uses skylake-avx512 (AVX512F and AVX512DQ) (16x for single, 8x for double)
+
+For LoongArch (`--with-arch=loongarch`), `[choices]` can be `auto`, `lsx`, `lasx`, or `no`:
+
+- auto (default): same as `lasx`
+- lasx: uses 256-bit LASX instructions (8 single-precision lanes); recommended for CPUs that support LASX, such as the Loongson 3A6000
+- lsx: uses 128-bit LSX instructions (4 single-precision lanes); for LA64 CPUs that provide LSX only
+- no: disables the LoongArch SIMD kernels and uses the scalar F64 kernels
+
+The LoongArch SIMD width can also be switched at the make stage without re-running configure, e.g., `make LARCH_SIMD=lsx` or `make LARCH_SIMD=lasx`; note that the executable file name still follows the configure-time choice, so run configure with the intended `--with-simd` value to obtain a correctly named binary.
 
 Please note that the supported SIMD options of the compiler and the running CPU may differ. Make sure to use the SIMD version supported by the running CPU.
 
@@ -1830,7 +1840,7 @@ PeTar offers three methods for conducting collisional N-body simulations. The in
 PeTar employs various parallelization techniques to enhance the efficiency of simulations for large values of $N$. The parallel methods utilized in different components include:
 
 - **Tree Construction**: FPDS is utilized for tree construction, leveraging MPI and OpenMP for parallelization.
-- **Soft Force Calculation Kernel**: SIMD (such as AVX, AVX2, AVX512, A64FX) or GPU (CUDA) technologies are employed for soft force calculations.
+- **Soft Force Calculation Kernel**: SIMD (such as AVX, AVX2, AVX512, A64FX, LSX/LASX) or GPU (CUDA) technologies are employed for soft force calculations.
 - **Hard Calculation (Hermite, SDAR)**: OpenMP is utilized for the loop of clusters in hard calculations.
 
 When appropriate tree time steps and changeover radii are set, the performance of hard calculations can be comparable to that of soft force calculations. In such cases, the use of GPUs may not significantly enhance performance, unlike in the direct N-body method for soft forces. Therefore, for optimal performance with large $N$, it is advisable to utilize more CPU cores rather than a few CPU cores with GPUs. This recommendation is particularly relevant when a substantial number of binaries are present in the simulation.

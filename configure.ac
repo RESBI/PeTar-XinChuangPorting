@@ -126,15 +126,18 @@ AS_IF([test x"$use_omp" != xno],
 # x86
 AC_ARG_WITH([arch],
 	    [AS_HELP_STRING([--with-arch],
-                            [compile with architecture type (x86, fugaku). Default: x86])],
+                            [compile with architecture type (x86, fugaku, loongarch). Default: x86])],
             [],
 	    [with_arch=x86])
 
 AC_ARG_WITH([simd],
             [AS_HELP_STRING([--with-simd],
-                [compile with x86 architecture support (avx, avx2, avx512). Default: auto])],
+                [compile with architecture support (x86: avx, avx2, avx512; loongarch: lsx, lasx). Default: auto])],
             [],
             [with_simd=auto])
+
+use_larch_simd=no
+larch_simd=none
 
 AS_IF([test x"$with_arch" == xx86],
       [use_simd=no
@@ -172,6 +175,29 @@ AS_IF([test x"$with_arch" == xfugaku],
       [AX_CHECK_COMPILE_FLAG(['-Kfast -Nclang'],
                              [OPTFLAGS=$OPTFLAGS" -Kfast -Nclang"])
        PROG_NAME=$PROG_NAME".fugaku"])
+
+AS_IF([test x"$with_arch" == xloongarch],
+      [use_simd=no
+       use_larch_simd=yes
+       AS_CASE($with_simd,
+               [lsx], [AX_CHECK_COMPILE_FLAG([-mlsx],
+                                    [SIMDFLAGS=" -mlsx"
+                                     larch_simd=lsx
+                                     SIMD_TYPE=lsx
+                                     PROG_NAME=$PROG_NAME".lsx"],
+                                    [AC_MSG_FAILURE([-mlsx is not supported by the compiler])])],
+               [lasx], [larch_simd=lasx],
+               [auto], [larch_simd=lasx],
+               [no], [use_larch_simd=no
+                      larch_simd=none
+                      SIMDFLAGS=""],
+               [AC_MSG_FAILURE([$with_simd is not supported for LoongArch (lsx, lasx)])])
+       AS_IF([test x"$larch_simd" == xlasx],
+             [AX_CHECK_COMPILE_FLAG([-mlasx],
+                                    [SIMDFLAGS=" -mlasx"
+                                     SIMD_TYPE=lasx
+                                     PROG_NAME=$PROG_NAME".lasx"],
+                                    [AC_MSG_FAILURE([-mlasx is not supported by the compiler])])])])
 
 AC_ARG_ENABLE([simd-64],
               [AS_HELP_STRING([--enable-simd-64],
@@ -454,6 +480,8 @@ VERSION=$petar_version'_'$sdar_version
 AC_SUBST([with_arch])
 AC_SUBST([use_simd])
 AC_SUBST([use_simd_64])
+AC_SUBST([use_larch_simd])
+AC_SUBST([larch_simd])
 AC_SUBST([use_quad])
 AC_SUBST([use_mpi])
 AC_SUBST([use_cuda])
@@ -506,6 +534,8 @@ AS_IF([test "x$use_simd" != xno],
        AS_IF([test "x$with_simd" == xauto],
              [AC_MSG_NOTICE([  Notice: this is auto-detected based on the host CPU architecture])
               AC_MSG_NOTICE([          If different CPU is used for running, check whether $SIMD_TYPE is also supported])])])
+AS_IF([test "x$use_larch_simd" != xno],
+      [AC_MSG_NOTICE([     SIMD type:         LoongArch $larch_simd])])
 AC_MSG_NOTICE([     Using OpenMP:      $use_omp])
 AC_MSG_NOTICE([     Debug mode:        $with_debug])
 AC_MSG_NOTICE([     Step mode:         $with_step_mode])

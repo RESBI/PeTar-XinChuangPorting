@@ -1,6 +1,7 @@
 use_arch=@with_arch@
 use_simd=@use_simd@
 use_simd_64=@use_simd_64@
+use_larch_simd=@use_larch_simd@
 use_mpi =@use_mpi@
 use_gpu_cuda=@use_cuda@
 use_omp = @use_omp@
@@ -202,6 +203,28 @@ endif # x86
 ifeq ($(use_arch),fugaku)
 CXXFLAGS += -D USE_FUGAKU
 endif # fugaku
+
+#-------------------------------------
+# LoongArch SIMD width: lasx (256-bit) or lsx (128-bit).
+# Default comes from configure (--with-simd=lasx|lsx|no); it can also be
+# switched individually at the make stage, e.g.
+#     make LARCH_SIMD=lsx
+#     make LARCH_SIMD=lasx
+# (the output file name still follows the configure-time choice; run
+#  configure with --with-simd=lsx for the correctly named LSX binary)
+LARCH_SIMD ?= @larch_simd@
+
+ifeq ($(use_arch),loongarch)
+ifneq ($(LARCH_SIMD),none)
+ifeq ($(LARCH_SIMD),lsx)
+CXXFLAGS += -mlsx
+CXXFLAGS += -D LARCH_SIMD_LSX
+else ifeq ($(LARCH_SIMD),lasx)
+CXXFLAGS += -mlasx
+endif
+CXXFLAGS += -D USE_LARCH_SIMD
+endif # LARCH_SIMD
+endif # loongarch
 
 #-------------------------------------
 ifeq ($(use_gperf),yes)
