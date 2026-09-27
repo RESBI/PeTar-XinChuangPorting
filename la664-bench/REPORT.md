@@ -4,6 +4,7 @@
 
 - Date: 2026-09-28
 - Platform: Loongson-3A6000 (LA664 core), 4 physical cores x 2 SMT = 8 logical CPUs, fixed 2.5 GHz, 31 GiB RAM, 16 MB shared L3
+- Clock: 2.5 GHz nominal; independently measured at 2.50 GHz (dependent-instruction chains and hardware cycle counters), with no throttling under load
 - ISA: loongarch64 (LA64v1.0) with LSX (128-bit) and LASX (256-bit)
 - Toolchain: GCC 15.3.0, OpenMPI 4.1.6
 - Code: PeTar master (`1268_298`) + FDPS 7.0 + SDAR; new kernels in `src/force_loongarch.hpp`
@@ -100,7 +101,7 @@ h = 1 - a y_1^2,\qquad
 y_2 = y_1 + y_1\left(\tfrac12 h + \tfrac38 h^2\right).
 $$
 
-The first refinement is the Newton step from the x86 `RSQRT_NR_EPJ_X2` path, which lifts the 5-bit seed to about 11 bits; the second is the cubic correction used by the Fugaku port, which reaches full F32 accuracy. Measured maximum relative error: **1.5e-7**. In a throughput micro-benchmark the complete sequence costs about **0.83 ns/element**, while the ISA estimate path (`xvfrsqrt.s`) measured 1.48 ns/element on this core.
+The first refinement is the Newton step from the x86 `RSQRT_NR_EPJ_X2` path, which lifts the 5-bit seed to about 11 bits; the second is the cubic correction used by the Fugaku port, which reaches full F32 accuracy. Measured maximum relative error: **1.5e-7**. Dependent-chain measurements on the 3A6000 give about **47 cycles per 8-lane vector** for this sequence (for comparison, the platform's exact `xvfrsqrt.s` instruction measures ~25 cycles and `fsqrt`+`fdiv` ~30 cycles under the same method); the tree-force loop keeps many independent interactions in flight, and the complete EP-EP kernel still costs only 1.42 ns per interaction (section 4), so the refinement chain is not a bottleneck. The software sequence was chosen to share the exact formulas with the x86 and Fugaku ports, so the precision does not depend on a given CPU's implementation.
 
 ### 2.4 Neighbor counting with an F64 fallback
 

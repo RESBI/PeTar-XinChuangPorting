@@ -22,7 +22,7 @@ Contents:
 - No raw benchmark data are stored in this repository; every figure and table
   in the reports is derived from the measurements described in them.
 
-Key results on the 3A6000 (4 physical cores x 2 SMT, fixed 2.5 GHz, GCC 15.3):
+Key results on the 3A6000 (4 physical cores x 2 SMT, 2.5 GHz measured at 2.50 GHz, GCC 15.3):
 
 | workload | scalar (F64) | LSX (128-bit) | LASX (256-bit) |
 |---|---|---|---|
