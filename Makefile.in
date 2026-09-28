@@ -214,6 +214,12 @@ endif # fugaku
 #  configure with --with-simd=lsx for the correctly named LSX binary)
 LARCH_SIMD ?= @larch_simd@
 
+# Reciprocal-square-root implementation for the LoongArch kernels:
+#   hw (default): platform vector rsqrt instruction (xvfrsqrt.s / vfrsqrt.s);
+#                 correctly rounded and kept as the production design
+#   sw          : bit-magic seed + Newton step + cubic correction
+LARCH_RSQRT ?= hw
+
 ifeq ($(use_arch),loongarch)
 ifneq ($(LARCH_SIMD),none)
 ifeq ($(LARCH_SIMD),lsx)
@@ -223,6 +229,9 @@ else ifeq ($(LARCH_SIMD),lasx)
 CXXFLAGS += -mlasx
 endif
 CXXFLAGS += -D USE_LARCH_SIMD
+ifeq ($(LARCH_RSQRT),sw)
+CXXFLAGS += -D LARCH_RSQRT_SW
+endif
 endif # LARCH_SIMD
 endif # loongarch
 

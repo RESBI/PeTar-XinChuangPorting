@@ -6,9 +6,10 @@
 //  * Tree force (EP-EP, EP-SP) is computed in F32 with LASX (8 x f32)
 //    or LSX (4 x f32) vectors; positions are translated by the first
 //    active i-particle to suppress cancellation.
-//  * 1/sqrt() uses a bit-magic seed + 3 Newton-Raphson iterations
-//    (LA664 has no frecipe estimate instruction; this is the fastest
-//    accurate path found on the machine).
+//  * 1/sqrt() uses the platform's exact vector rsqrt instruction
+//    (xvfrsqrt.s / vfrsqrt.s) by default; -DLARCH_RSQRT_SW selects the
+//    software chain (bit-magic seed + Newton step + cubic correction)
+//    instead (see the detailed comment at rsqrt_fast below).
 //  * Neighbour counting follows the scalar kernel semantics exactly:
 //    the F32 count is cross-checked per pair against a relative margin
 //    band; any i-particle touching the band is re-counted in F64.
@@ -109,15 +110,22 @@ static inline bool any_true(const VI v) {
 }
 
 // 1/sqrt for F32 vectors.
-// The LA664 core has no frecipe estimate instruction, so the seed comes
-// from the bit-magic constant; the correction steps then follow the same
-// formulas as the upstream SIMD ports:
-//   step 1: x86 phantomquad RSQRT_NR_EPJ_X2 Newton step, x*(3-a*x*x)/2
-//   step 2: FUGAKU force_fugaku.hpp cubic correction, x*(1 + h*(0.5+0.375h))
-// Step 1 lifts the 5-bit magic seed to ~11 bit (comparable with the
-// hardware rsqrt estimate used on x86/A64FX); step 2 then reaches full
-// F32 accuracy. max relative error ~1e-7 measured on la664.
-static inline VF rsqrt_fast(const VF a) {
+// Two implementations are available, selected at compile time:
+//   default (hardware): the platform's vector reciprocal-square-root
+//     instruction (xvfrsqrt.s / vfrsqrt.s). On the LA664 this returns
+//     the correctly rounded F32 result (verified over 2e6 random inputs)
+//     in a single instruction, and it is the design kept for production:
+//     zero rsqrt error improves the conservation quality of the run,
+//     with no throughput cost at production scale (see the dedicated
+//     rsqrt report in la664-bench/).
+//   LARCH_RSQRT_SW (or -DLARCH_RSQRT_SW): the software chain, kept as a
+//     build option: bit-magic seed + x86 phantomquad RSQRT_NR_EPJ_X2
+//     Newton step + FUGAKU cubic correction. The seed constant provides
+//     5 bits, step 1 lifts it to ~11 bits, step 2 reaches full F32
+//     accuracy (max relative error ~1.5e-7 measured on the 3A6000). It
+//     has a higher throughput in dense micro-loops than the hardware
+//     instruction but a much longer dependent-chain latency.
+static inline VF rsqrt_sw(const VF a) {
     static const S32 magic = 0x5f3759df;
     VI ib = (VI)a;
     ib = LARCH_VSUBW(vrepli(magic), LARCH_VSRLIW(ib, 1));
@@ -137,6 +145,18 @@ static inline VF rsqrt_fast(const VF a) {
     x = LARCH_VMADD(x, poly, x);
     return x;
 }
+
+#if defined(LARCH_RSQRT_SW) && !defined(LARCH_RSQRT_HW)
+static inline VF rsqrt_fast(const VF a) { return rsqrt_sw(a); }
+#else
+static inline VF rsqrt_fast(const VF a) {
+#if defined(LARCH_SIMD_LSX)
+    return (VF)__lsx_vfrsqrt_s(a);
+#else
+    return (VF)__lasx_xvfrsqrt_s(a);
+#endif
+}
+#endif
 
 // relative half-width of the r2/R2 margin band used for neighbour-count
 // cross checking against the F64 reference (2^-10)

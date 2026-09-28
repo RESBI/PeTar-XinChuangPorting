@@ -9,18 +9,19 @@
 - Toolchain: GCC 15.3.0, OpenMPI 4.1.6
 - Code: PeTar master (`1268_298`) + FDPS 7.0 + SDAR; new kernels in `src/force_loongarch.hpp`
 - Main benchmark: N=2000 binary-rich demo, t=1 Myr (512 tree steps), 3 repetitions, medians
-- Figures: `figs/` (LoongArch scalar / LSX / LASX), `figs_cross/` (cross-platform comparison)
+- Figures: `figs/` (LoongArch scalar / LSX / LASX), `figs_cross/` (cross-platform comparison), `figs_rsqrt/` (reciprocal-square-root study)
 
 ---
 
 ## 0. Executive Summary
 
-The tree-force calculation in PeTar was previously limited to scalar F64 kernels on LoongArch. This work adds hand-written LSX (128-bit) and LASX (256-bit) kernels that reproduce the x86/Fugaku approach -- F32 arithmetic, an origin shift for cancellation control, a fast reciprocal square root, and an exact F64 fallback for neighbor counting -- while keeping the physical model unchanged. The port is validated at four levels and benchmarked end to end on a Loongson-3A6000.
+The tree-force calculation in PeTar was previously limited to scalar F64 kernels on LoongArch. This work adds hand-written LSX (128-bit) and LASX (256-bit) kernels that reproduce the x86/Fugaku approach -- F32 arithmetic, an origin shift for cancellation control, an exact reciprocal square root, and an exact F64 fallback for neighbor counting -- while keeping the physical model unchanged. For the reciprocal square root the port uses LA664's exact vector instruction `xvfrsqrt.s`/`vfrsqrt.s` by default (zero error; see the dedicated study `REPORT_RSQRT.md`), keeping the software correction chain as an optional build. The port is validated at four levels and benchmarked end to end on a Loongson-3A6000.
 
 | Metric | Result |
 |---|---|
 | EP-EP kernel, ni=1024 x nj=2048 | **1.42 ns/interaction** (LASX), 2.80 ns (LSX), 8.99 ns (scalar): **6.3x / 3.2x** |
-| Official `petar.simd.test` | max force error 4.3e-4 (tolerance 7e-3), potential error 2.2e-6, **neighbor counts identical particle by particle** |
+| Reciprocal square root (default) | platform exact instruction: rsqrt error **0**, force errors improved by 16%-21%, better conservation, production performance within 1% (`REPORT_RSQRT.md`) |
+| Official `petar.simd.test` | max force error **3.6e-4** (default hw; 4.3e-4 for the optional sw chain; tolerance 7e-3), potential error 2.2e-6, **neighbor counts identical particle by particle** |
 | Single core, N=2000 demo, 512 steps | **14.10 s** (LASX), 18.70 s (LSX), 38.86 s (scalar): **2.76x / 2.08x** |
 | Best parallel layout | 1 process x 4 OpenMP threads: **4.53 s** (LASX), 6.04 s (LSX) |
 | 4x1 layout vs its scalar counterpart | 5.28 s vs 12.06 s (**2.28x**) |
@@ -28,6 +29,8 @@ The tree-force calculation in PeTar was previously limited to scalar F64 kernels
 | Conservation QA, t=10 Myr, 4x1 | dE and dL within the same order as the scalar build (see section 8) |
 | Production sample, 100 Myr, 8 OMP threads | **11 min 39 s** (LASX), 10 min 54 s (LSX) vs 28 min 16 s (scalar) |
 | Debug validation | 1 and 4 ranks, 128 tree steps each: zero assertion failures, zero neighbor-count mismatches |
+
+> The performance figures in sections 4-9 were measured on software-chain builds; the two rsqrt implementations differ by <=1% at production scale (the default hw build is slightly faster for N>=4000), by +1% to +5% in kernel micro-benchmarks (-2.8% at nj=8), and the default hw build is the more accurate and better-conserving one. See `REPORT_RSQRT.md` for the comparison.
 
 **In one sentence:** the SIMD kernels cut the tree force by 3-6x, which translates into a **2.1-2.8x end-to-end speed-up per core** and a **3.7x** speed-up per step at N=8000; once the tree force is no longer dominant, the short-range Hermite force and cluster search become the new bottlenecks.
 
@@ -87,9 +90,26 @@ Everything except $\epsilon^2$ and $r_{\text{out}}^2$ is computed in F32; forces
 
 To control catastrophic cancellation, every group is translated so that the **first active i particle** sits at the origin before conversion to F32; all separations, $r^2$ values, and the $r_{\text{search}}$ comparison are performed in the shifted frame.
 
-### 2.3 Fast reciprocal square root
+### 2.3 Reciprocal square root (exact instruction by default)
 
-The scalar `1.0/sqrt(r2)` is the hidden cost centre of the tree force, and LA664 does not provide a usable scalar estimate instruction. The port therefore builds the reciprocal square root from a bit-magic seed followed by two refinements, reusing formulas already proven in the upstream ports:
+The scalar `1.0/sqrt(r2)` is the hidden cost centre of the tree force. LA664 does not provide a usable scalar estimate instruction, but it does provide an **exact** vector reciprocal-square-root instruction, `xvfrsqrt.s` (LASX) / `vfrsqrt.s` (LSX); it was measured to agree bit for bit with the F32 `1/sqrtf` over 2x10^6 random inputs (error 0). The port therefore **uses this exact instruction by default**, making the rsqrt error zero, and keeps a software correction chain with formulas identical to the upstream x86/Fugaku ports as an optional build. The two are selected by the make switch `LARCH_RSQRT=hw|sw`:
+
+```c
+#if defined(LARCH_RSQRT_SW) && !defined(LARCH_RSQRT_HW)
+    return rsqrt_sw(a);              // optional: bit-magic seed + Newton + cubic (11 instructions)
+#else
+    return __lasx_xvfrsqrt_s(a);     // default: exact platform instruction (1 instruction, error 0)
+#endif
+```
+
+The two paths compare as follows:
+
+| Path | Implementation | rsqrt accuracy | Dependent-chain latency | Dense throughput (8 lanes) |
+|---|---|---|---|---|
+| **`hw` (default)** | `xvfrsqrt.s` / `vfrsqrt.s`, 1 instruction | **0** (correctly rounded) | **25.0 cycles/vector** | 29.52 cycles/vector |
+| `sw` (optional) | bit-magic seed + Newton step + cubic correction, 11 instructions | 1.5e-7 | 47.2 cycles/vector | **5.60 cycles/vector** |
+
+The optional software chain (`sw`) evaluates
 
 $$
 y_0 = \texttt{0x5f3759df} - (a \gg 1),\qquad
@@ -101,7 +121,7 @@ h = 1 - a y_1^2,\qquad
 y_2 = y_1 + y_1\left(\tfrac12 h + \tfrac38 h^2\right).
 $$
 
-The first refinement is the Newton step from the x86 `RSQRT_NR_EPJ_X2` path, which lifts the 5-bit seed to about 11 bits; the second is the cubic correction used by the Fugaku port, which reaches full F32 accuracy. Measured maximum relative error: **1.5e-7**. Dependent-chain measurements on the 3A6000 give about **47 cycles per 8-lane vector** for this sequence (for comparison, the platform's exact `xvfrsqrt.s` instruction measures ~25 cycles and `fsqrt`+`fdiv` ~30 cycles under the same method); the tree-force loop keeps many independent interactions in flight, and the complete EP-EP kernel still costs only 1.42 ns per interaction (section 4), so the refinement chain is not a bottleneck. The software sequence was chosen to share the exact formulas with the x86 and Fugaku ports, so the precision does not depend on a given CPU's implementation.
+The first refinement is the Newton step from the x86 `RSQRT_NR_EPJ_X2` path, which lifts the 5-bit magic seed to about 11 bits; the second is the cubic correction used by the Fugaku port, which reaches full F32 accuracy (measured maximum relative error **1.5e-7**). The A/B study of the two paths (`REPORT_RSQRT.md`) shows that the exact instruction improves the program-level force error by 16% (EP-EP) / 21% (EP-SP) and conserves better at large N (the N=16000 final energy error is about 15x smaller); in performance, the end-to-end difference on the N=2000 demo is <=0.5% (statistically equivalent) and the N=4000-16000 weak scaling is actually 0.3%-1.0% faster, while only pure-rsqrt-dense kernel micro-benchmarks are 1%-5% slower (36% for the monopole kernel), a deficit diluted by Amdahl's law and memory waits in real runs. On latency, the exact instruction needs **25 cycles/vector** against the software chain's **47 cycles/vector**; the software chain has the higher dense throughput (5.60 vs 29.52 cycles/vector on 8-lane LASX), which is exactly where the micro-benchmark difference comes from. Balancing accuracy, conservation and production performance, the port keeps the exact instruction as the default; the software chain remains an optional branch (`make LARCH_RSQRT=sw`) for formula-parity studies.
 
 ### 2.4 Neighbor counting with an F64 fallback
 
@@ -122,6 +142,8 @@ If any particle falls inside the band, the whole j loop for that i is recomputed
 | binary | `petar.mpi.omp.lasx` | `petar.mpi.omp.lsx` | `petar.mpi.omp` |
 
 Both widths are compiled from the same header; a single `-D USE_LARCH_SIMD` plus the width macro `LARCH_SIMD_LSX` selects the LASX or LSX branch, and the vector loops are written with width-generic helpers.
+
+The reciprocal-square-root implementation is selected by the make switch `LARCH_RSQRT`: `hw` (default; the exact platform instruction `xvfrsqrt.s` / `vfrsqrt.s`) or `sw` (the software correction chain, section 2.3; full A/B in `REPORT_RSQRT.md`).
 
 Files touched by the port:
 
@@ -153,17 +175,17 @@ The four optimization levels produce identical results, so the kernels do not re
 
 ### 3.2 Official `petar.simd.test`
 
-PeTar ships a comparison program (Plummer initial conditions, N=1000 x 2000, threshold 7e-3). Both SIMD widths pass with the same numbers:
+PeTar ships a comparison program (Plummer initial conditions, N=1000 x 2000, threshold 7e-3). Both SIMD widths pass:
 
-| Quantity | Max relative error |
-|---|---|
-| EP-EP force | 4.30e-4 |
-| EP-EP potential | 2.18e-6 |
-| EP-SP force | 2.93e-4 |
-| EP-SP potential | 2.22e-6 |
-| Neighbor counts | 1003 vs 1003, identical per particle |
+| Quantity | Max relative error (default hw) | Optional sw |
+|---|---|---|
+| EP-EP force | **3.61e-4** | 4.30e-4 |
+| EP-EP potential | 2.18e-6 | 2.18e-6 |
+| EP-SP force | **2.32e-4** | 2.93e-4 |
+| EP-SP potential | 2.73e-6 | 2.22e-6 |
+| Neighbor counts | 1003 vs 1003, identical per particle | same |
 
-LSX and LASX report identical error values because both use the same F32 operation order and the same correction formula; the vector width changes parallelism, not rounding.
+For a given rsqrt implementation, LSX and LASX report identical error values because both use the same F32 operation order and the same correction formula; the vector width changes parallelism, not rounding. The default hw path replaces the software chain's 1.5e-7 with zero error, further reducing the force errors (see `REPORT_RSQRT.md`).
 
 ### 3.3 Kernel-benchmark self-check
 
@@ -209,6 +231,8 @@ At ni=1024:
 ![Kernel bars](figs/figK2_kernel_bars.png)
 
 *Figure 4-2: kernel cost at ni=1024, nj=2048 (log scale).*
+
+> The scan above was measured on software-chain builds; the default hw build gives 1.50 ns for EP-EP at ni=1024, nj=2048 (+5.1%), 2.53 ns at nj=8 (-2.8%) and 1.48 ns for the monopole kernel (+36%), with the quadrupole and neighbor search essentially unchanged. That kernel-level difference is diluted to <=1% end to end; see `REPORT_RSQRT.md` sections 5 and 7.
 
 Three observations:
 
@@ -343,6 +367,8 @@ The SIMD kernels use F32 for the tree force, so the conservation quality was che
 
 Energy conservation degrades by at most half an order of magnitude (to the 1e-6 level for LASX), while angular-momentum errors are essentially unchanged (about 2e-5). No run shows the 7%-level discrete jump caused by a hard-binary event. **For scientific purposes the F32 tree force costs nothing that matters.**
 
+The check above was performed on software-chain builds. The default hw build removes the rsqrt error entirely and improves conservation further in the t=2 Myr weak-scaling runs at N=4k/8k/16k: the final energy error at N=16000 is 1.37e-7 (versus 2.13e-6 for the software chain, about 15x smaller), and the cumulative angular-momentum error is 12%/24% smaller at N=4000/16000 (see `REPORT_RSQRT.md` section 7.4).
+
 ---
 
 ## 9. Production Run (100 Myr)
@@ -464,7 +490,7 @@ The tsv110 and Xeon systems were not available for the same fine-grained per-ste
 
 ## 11. Lessons and Next Steps
 
-1. **The F32-plus-fast-rsqrt recipe transfers cleanly.** Maximum force errors stay at the 1e-4 level against the 7e-3 tolerance, neighbor counts are bit-identical, and conservation remains at the 1e-6 level. No physics trade-off is required to get the speed-up.
+1. **The F32-plus-exact-rsqrt recipe transfers cleanly.** Maximum force errors stay at the 1e-4 level against the 7e-3 tolerance, neighbor counts are bit-identical, and conservation remains at the 1e-6 level. No physics trade-off is required to get the speed-up. The default platform exact instruction (zero rsqrt error) further improves the force error and conservation at a production-neutral cost; the software chain is kept as an option.
 2. **Amdahl now rules.** After the port, the tree force is only about 40% of a 1x1 step; the short-range Hermite force (F64) and cluster search dominate the remainder. Vectorizing or pruning those is the next lever; widening the tree-force kernels further would yield little.
 3. **The optimal parallel layout changed** from 4x1 to 1x4. Oversubscription and SMT are not useful on this platform.
 4. **Report step counts with s/Myr.** The cross-platform comparison in section 10 shows that a step-count mismatch can distort ratios by 2-4x; ms/step or fixed-dt runs are the safe currency.
@@ -474,7 +500,7 @@ The tsv110 and Xeon systems were not available for the same fine-grained per-ste
 
 ## 12. Conclusion
 
-The LoongArch LSX/LASX tree-force port is functionally complete and production-ready. Kernel-level speed-ups of 3.2x (LSX) and 6.3x (LASX) translate into 2.1-2.8x end-to-end per core and 2.4-2.6x on a 100 Myr production run, with numerical conservation indistinguishable from the scalar build at the level that matters for N-body science. On this 4-core platform, LASX at N=2000 completes the standard demo faster than a 24-core Kunpeng-920 -- not because cores stop mattering, but because SIMD multiplies the per-core assets that this workload actually consumes.
+The LoongArch LSX/LASX tree-force port is functionally complete and production-ready. Kernel-level speed-ups of 3.2x (LSX) and 6.3x (LASX) translate into 2.1-2.8x end-to-end per core and 2.4-2.6x on a 100 Myr production run, with numerical conservation indistinguishable from the scalar build at the level that matters for N-body science; the default reciprocal square root uses the platform's exact instruction (zero error) and improves conservation while keeping production performance equivalent to the software chain (`REPORT_RSQRT.md`). On this 4-core platform, LASX at N=2000 completes the standard demo faster than a 24-core Kunpeng-920 -- not because cores stop mattering, but because SIMD multiplies the per-core assets that this workload actually consumes.
 
 ---
 
@@ -486,6 +512,9 @@ The LoongArch LSX/LASX tree-force port is functionally complete and production-r
     --prefix=$PWD/install \
     --with-fdps-prefix=/path/to/FDPS --with-sdar-prefix=/path/to/SDAR
 make -j8 && make install
+
+# optional: software correction chain (the default hw uses xvfrsqrt.s / vfrsqrt.s)
+make LARCH_SIMD=lasx LARCH_RSQRT=sw
 
 # build and run the official self-test
 make build/petar.simd.test && ./build/petar.simd.test
@@ -527,3 +556,4 @@ Runtime notes: `OMP_STACKSIZE=128M` and `ulimit -s unlimited` are recommended fo
 | `figs_cross/figW4_dt_sensitivity.png` | dt sensitivity at N=2000 |
 | `figs_cross/figW5_hw_ledger.png` | Per-core and aggregate hardware ledger |
 | `figs_cross/figW6_scaling_matched.png` | Matched-step per-step scaling |
+| `figs_rsqrt/figR1..figR7_*.png` | Reciprocal-square-root A/B figures (see `REPORT_RSQRT.md`) |
